@@ -1,0 +1,81 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            runtime: win-x64
+          - os: windows-latest
+            runtime: win-arm64
+          - os: ubuntu-latest
+            runtime: linux-x64
+          - os: ubuntu-latest
+            runtime: linux-arm64
+          - os: macos-latest
+            runtime: osx-x64
+          - os: macos-latest
+            runtime: osx-arm64
+
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: '10.0.x'
+        dotnet-quality: 'preview'
+
+    - name: Restore dependencies
+      run: dotnet restore
+
+    - name: Publish
+      run: dotnet publish src/SpyderMcp.Server/SpyderMcp.Server.csproj --configuration Release --runtime ${{ matrix.runtime }} --self-contained true -p:PublishSingleFile=true -o ./publish/${{ matrix.runtime }}
+
+    - name: Archive release (Windows)
+      if: startsWith(matrix.os, 'windows')
+      run: Compress-Archive -Path ./publish/${{ matrix.runtime }}/* -DestinationPath ./SpyderMcp.Server-${{ matrix.runtime }}.zip
+      shell: pwsh
+
+    - name: Archive release (Linux/macOS)
+      if: "!startsWith(matrix.os, 'windows')"
+      run: |
+        cd ./publish/${{ matrix.runtime }}
+        tar -czvf ../../SpyderMcp.Server-${{ matrix.runtime }}.tar.gz *
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: SpyderMcp.Server-${{ matrix.runtime }}
+        path: |
+          ./SpyderMcp.Server-${{ matrix.runtime }}.zip
+          ./SpyderMcp.Server-${{ matrix.runtime }}.tar.gz
+        if-no-files-found: ignore
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: ./artifacts
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: ./artifacts/**/*
+        generate_release_notes: true
