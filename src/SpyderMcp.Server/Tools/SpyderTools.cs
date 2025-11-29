@@ -1,53 +1,110 @@
+﻿using ModelContextProtocol.Server;
+using Spyder.Client;
+using Spyder.Client.Common;
+using Spyder.Client.Net;
+using Spyder.Client.Net.Notifications;
+using SpyderMcp.Server.Models;
+using System;
+using System.Collections.Generic;
 using System.ComponentModel;
-using ModelContextProtocol.Server;
+using System.Text;
 
-namespace SpyderMcp.Server.Tools;
-
-/// <summary>
-/// MCP tools for interacting with Spyder video processors.
-/// Add your Spyder-specific tools here using the SpyderClientLibrary.
-/// </summary>
-[McpServerToolType]
-public static class SpyderTools
+namespace SpyderMcp.Server.Tools
 {
-    /// <summary>
-    /// Example tool that echoes back the input message.
-    /// Replace this with actual Spyder functionality using SpyderClientLibrary.
-    /// </summary>
-    /// <param name="message">The message to echo back</param>
-    /// <returns>The echoed message with a prefix</returns>
-    [McpServerTool]
-    [Description("Echo a message back - this is a placeholder tool. Replace with actual Spyder tools.")]
-    public static string Echo(string message)
+    public static partial class SpyderTools
     {
-        return $"Spyder MCP Echo: {message}";
-    }
+        private static ISpyderClient? _currentServer;
+        private static SpyderServerEventListener? _eventListener;
+        private readonly static Dictionary<string, SpyderServerInfo> _serverList = [];
 
-    // TODO: Add Spyder-specific tools here. Example structure:
-    //
-    // [McpServerTool]
-    // [Description("Connect to a Spyder server")]
-    // public static async Task<string> ConnectToSpyder(string serverAddress, int port = 11116)
-    // {
-    //     // Use SpyderClientLibrary to connect
-    //     // var client = new SpyderClient();
-    //     // await client.ConnectAsync(serverAddress, port);
-    //     return $"Connected to Spyder server at {serverAddress}:{port}";
-    // }
-    //
-    // [McpServerTool]
-    // [Description("Get list of available sources")]
-    // public static async Task<string> GetSources()
-    // {
-    //     // Use SpyderClientLibrary to get sources
-    //     return "List of sources...";
-    // }
-    //
-    // [McpServerTool]
-    // [Description("Switch a layer to a specific source")]
-    // public static async Task<string> SwitchSource(string layerName, string sourceName)
-    // {
-    //     // Use SpyderClientLibrary to switch source
-    //     return $"Switched {layerName} to {sourceName}";
-    // }
+        public static void Initialize(SpyderServerEventListener eventListener)
+        {
+            _eventListener = eventListener;
+            _eventListener.ServerAnnounceMessageReceived += OnServerAnnounceMessageReceived;
+        }
+
+        private static void OnServerAnnounceMessageReceived(object sender, SpyderServerAnnounceInformation serverInfo)
+        {
+            _serverList[serverInfo.Address] = new SpyderServerInfo(serverInfo);
+        }
+
+        private static async Task<CommandResult<List<RegisterInfo>>> GetRegistersAsync(RegisterType type)
+        {
+            return await GetMcpDataFromSpyder(
+                server => server.GetRegisters(type),
+                register => new RegisterInfo(register)
+            );
+        }
+
+        private static async Task<CommandResult<List<RegisterPageInfo>>> GetRegisterPagesAsync(RegisterType type)
+        {
+            return await GetMcpDataFromSpyder(
+                server => server.GetRegisterPages(type),
+                page => new RegisterPageInfo(page)
+            );
+        }
+
+        private static async Task<CommandResult<List<U>>> GetMcpDataFromSpyder<T,U>(Func<ISpyderClient, Task<List<T>>> dataFetcher, Func<T, U> convert)
+        {
+            var response = new CommandResult<List<U>>();
+            if (_currentServer == null)
+            {
+                response.Success = false;
+                response.Message = "No Spyder server connected.";
+                return response;
+            }
+            try
+            {
+                IList<T> data = await dataFetcher(_currentServer);
+                if (data == null)
+                {
+                    response.Success = false;
+                    response.Message = "No data found.";
+                    return response;
+                }
+                else
+                {
+                    response.Success = true;
+                    response.Message = "Data retrieved successfully.";
+                    response.Data = [.. data.Select(d => convert(d))];
+                }
+            }
+            catch (Exception ex)
+            {
+                response.Success = false;
+                response.Message = $"Error retrieving data: {ex.Message}";
+            }
+            return response;
+        }
+
+        private static async Task<CommandResult> RunSpyderCommandForMcp(Func<ISpyderClient, Task<bool>> commandRunner, string? successMessage = null, string? failureMessage = null)
+        {
+            var response = new CommandResult();
+            if (_currentServer == null)
+            {
+                response.Success = false;
+                response.Message = "No Spyder server connected.";
+                return response;
+            }
+            try
+            {
+                bool success = await commandRunner(_currentServer);
+                response.Success = success;
+                if (success)
+                {
+                    response.Message = successMessage ?? "Command executed successfully.";
+                }
+                else
+                {
+                    response.Message = failureMessage ?? "Command execution failed.";
+                }
+            }
+            catch (Exception ex)
+            {
+                response.Success = false;
+                response.Message = $"Error executing command: {ex.Message}";
+            }
+            return response;
+        }
+    }
 }
